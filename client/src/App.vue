@@ -17,7 +17,7 @@
             {{ t('nav.orders') }}
           </router-link>
           <router-link to="/restocking" :class="{ active: $route.path === '/restocking' }">
-            Restocking
+            {{ t('nav.restocking') }}
           </router-link>
           <router-link to="/spending" :class="{ active: $route.path === '/spending' }">
             {{ t('nav.finance') }}

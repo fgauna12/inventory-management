@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from pydantic import BaseModel
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders
 
@@ -397,12 +397,15 @@ def create_restock_order(payload: CreateRestockOrderRequest):
             detail=f"Order total ${total_cost:.2f} exceeds budget ${payload.budget:.2f}",
         )
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
+    # Order number includes a per-second timestamp + an in-process counter, so
+    # it stays unique even after a restart resets `len(restock_orders)`.
+    order_number = (
+        f"RST-{now.strftime('%Y%m%d-%H%M%S')}-{len(restock_orders) + 1:03d}"
+    )
     order = {
         "id": str(uuid4()),
-        # Sequential human-readable number based on count + timestamp suffix
-        # to stay unique even after restart-driven counter resets.
-        "order_number": f"RST-{now.strftime('%Y%m%d')}-{len(restock_orders) + 1:03d}",
+        "order_number": order_number,
         "submitted_at": now.isoformat(timespec="seconds"),
         "budget": round(payload.budget, 2),
         "total_cost": round(total_cost, 2),

@@ -303,7 +303,7 @@ export default {
         const order = await api.createRestockOrder(payload)
         lastOrder.value = order
 
-        // Prepend to session list so newest is first
+        // Append to session list; `recentOrders` reverses the tail for display.
         submittedOrders.value.push(order)
       } catch (err) {
         submitError.value =

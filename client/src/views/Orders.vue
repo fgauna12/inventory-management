@@ -42,13 +42,13 @@
                       <div v-for="item in order.items" :key="item.sku" class="item-entry">
                         <span class="item-name">{{ item.name }}</span>
                         <span class="item-meta">
-                          Qty: {{ item.quantity }} @ ${{ item.unit_cost.toLocaleString() }}
+                          Qty: {{ item.quantity }} @ {{ formatCurrency(item.unit_cost) }}
                         </span>
                       </div>
                     </div>
                   </details>
                 </td>
-                <td><strong>${{ order.total_cost.toLocaleString() }}</strong></td>
+                <td><strong>{{ formatCurrency(order.total_cost) }}</strong></td>
                 <td>{{ order.lead_time_days }} days</td>
                 <td>{{ formatDate(order.expected_delivery) }}</td>
                 <td><span class="badge info">{{ order.status }}</span></td>
@@ -160,12 +160,7 @@ export default {
       try {
         loading.value = true
         const filters = getCurrentFilters()
-
-        // Fetch customer orders and restock orders in parallel
-        const [fetchedOrders, fetchedRestockOrders] = await Promise.all([
-          api.getOrders(filters),
-          api.getRestockOrders()
-        ])
+        const fetchedOrders = await api.getOrders(filters)
 
         // Sort orders by order_date (earliest first)
         orders.value = fetchedOrders.sort((a, b) => {
@@ -173,8 +168,6 @@ export default {
           const dateB = new Date(b.order_date)
           return dateA - dateB
         })
-
-        restockOrders.value = fetchedRestockOrders
       } catch (err) {
         error.value = 'Failed to load orders: ' + err.message
       } finally {
@@ -182,10 +175,27 @@ export default {
       }
     }
 
-    // Watch for filter changes and reload data
+    // Restock orders aren't filtered server-side, so they only need to load on mount.
+    const loadRestockOrders = async () => {
+      try {
+        restockOrders.value = await api.getRestockOrders()
+      } catch (err) {
+        console.error('Failed to load restock orders:', err)
+      }
+    }
+
+    // Watch for filter changes and reload customer orders only
     watch([selectedPeriod, selectedLocation, selectedCategory, selectedStatus], () => {
       loadOrders()
     })
+
+    const formatCurrency = (value) => {
+      if (value == null) return '$0.00'
+      return '$' + Number(value).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      })
+    }
 
     const getOrdersByStatus = (status) => {
       return orders.value.filter(order => order.status === status)
@@ -211,7 +221,10 @@ export default {
       })
     }
 
-    onMounted(loadOrders)
+    onMounted(() => {
+      loadOrders()
+      loadRestockOrders()
+    })
 
     return {
       t,
@@ -222,6 +235,7 @@ export default {
       getOrdersByStatus,
       getOrderStatusClass,
       formatDate,
+      formatCurrency,
       currencySymbol,
       translateProductName,
       translateCustomerName
