@@ -8,6 +8,56 @@
     <div v-if="loading" class="loading">{{ t('common.loading') }}</div>
     <div v-else-if="error" class="error">{{ error }}</div>
     <div v-else>
+      <!-- Submitted Restocking Orders — placed above regular orders -->
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">Submitted Restocking Orders ({{ restockOrders.length }})</h3>
+        </div>
+        <div v-if="restockOrders.length === 0" class="restock-empty">
+          No restocking orders submitted yet.
+        </div>
+        <div v-else class="table-container">
+          <table class="restock-table">
+            <thead>
+              <tr>
+                <th>Order #</th>
+                <th>Submitted</th>
+                <th>Items</th>
+                <th>Total Cost</th>
+                <th>Lead Time</th>
+                <th>Expected Delivery</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="order in restockOrders" :key="order.id">
+                <td><strong>{{ order.order_number }}</strong></td>
+                <td>{{ formatDate(order.submitted_at) }}</td>
+                <td>
+                  <details class="items-details">
+                    <summary class="items-summary">
+                      {{ order.items.length }} item{{ order.items.length !== 1 ? 's' : '' }}
+                    </summary>
+                    <div class="items-dropdown">
+                      <div v-for="item in order.items" :key="item.sku" class="item-entry">
+                        <span class="item-name">{{ item.name }}</span>
+                        <span class="item-meta">
+                          Qty: {{ item.quantity }} @ {{ formatCurrency(item.unit_cost) }}
+                        </span>
+                      </div>
+                    </div>
+                  </details>
+                </td>
+                <td><strong>{{ formatCurrency(order.total_cost) }}</strong></td>
+                <td>{{ order.lead_time_days }} days</td>
+                <td>{{ formatDate(order.expected_delivery) }}</td>
+                <td><span class="badge info">{{ order.status }}</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="stats-grid">
         <div class="stat-card success">
           <div class="stat-label">{{ t('status.delivered') }}</div>
@@ -95,6 +145,7 @@ export default {
     const loading = ref(true)
     const error = ref(null)
     const orders = ref([])
+    const restockOrders = ref([])
 
     // Use shared filters
     const {
@@ -124,10 +175,27 @@ export default {
       }
     }
 
-    // Watch for filter changes and reload data
+    // Restock orders aren't filtered server-side, so they only need to load on mount.
+    const loadRestockOrders = async () => {
+      try {
+        restockOrders.value = await api.getRestockOrders()
+      } catch (err) {
+        console.error('Failed to load restock orders:', err)
+      }
+    }
+
+    // Watch for filter changes and reload customer orders only
     watch([selectedPeriod, selectedLocation, selectedCategory, selectedStatus], () => {
       loadOrders()
     })
+
+    const formatCurrency = (value) => {
+      if (value == null) return '$0.00'
+      return '$' + Number(value).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      })
+    }
 
     const getOrdersByStatus = (status) => {
       return orders.value.filter(order => order.status === status)
@@ -153,16 +221,21 @@ export default {
       })
     }
 
-    onMounted(loadOrders)
+    onMounted(() => {
+      loadOrders()
+      loadRestockOrders()
+    })
 
     return {
       t,
       loading,
       error,
       orders,
+      restockOrders,
       getOrdersByStatus,
       getOrderStatusClass,
       formatDate,
+      formatCurrency,
       currencySymbol,
       translateProductName,
       translateCustomerName
@@ -172,6 +245,19 @@ export default {
 </script>
 
 <style scoped>
+/* Restock orders empty state */
+.restock-empty {
+  padding: 1.5rem;
+  color: #94a3b8;
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+/* Restock table uses auto layout (variable column count vs fixed orders table) */
+.restock-table {
+  width: 100%;
+}
+
 /* Fixed table layout to prevent column shifting */
 .orders-table {
   table-layout: fixed;

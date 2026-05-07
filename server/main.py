@@ -2,7 +2,21 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from pydantic import BaseModel
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders
+
+# Per-category supplier lead times (calendar days). Used to compute expected
+# delivery for a restocking order; the order's lead time is the max across
+# its categories so the whole shipment is on hand by that date.
+CATEGORY_LEAD_TIMES = {
+    "Circuit Boards": 14,
+    "Sensors": 10,
+    "Power Supplies": 12,
+    "Controllers": 9,
+    "Actuators": 11,
+}
+DEFAULT_LEAD_TIME = 10
 
 app = FastAPI(title="Factory Inventory Management System")
 
@@ -119,6 +133,37 @@ class CreatePurchaseOrderRequest(BaseModel):
     unit_cost: float
     expected_delivery_date: str
     notes: Optional[str] = None
+
+class RestockOrderItem(BaseModel):
+    sku: str
+    name: str
+    category: str
+    quantity: int
+    unit_cost: float
+    line_total: float
+
+class RestockOrder(BaseModel):
+    id: str
+    order_number: str
+    submitted_at: str
+    budget: float
+    total_cost: float
+    lead_time_days: int
+    expected_delivery: str
+    status: str
+    items: List[RestockOrderItem]
+
+class CreateRestockOrderItem(BaseModel):
+    sku: str
+    quantity: int
+
+class CreateRestockOrderRequest(BaseModel):
+    budget: float
+    items: List[CreateRestockOrderItem]
+
+# In-memory store for submitted restocking orders. Resets on server restart,
+# matching the rest of the mock-data layer.
+restock_orders: List[dict] = []
 
 # API endpoints
 @app.get("/")
@@ -303,6 +348,74 @@ def get_monthly_trends():
     result = list(months.values())
     result.sort(key=lambda x: x['month'])
     return result
+
+@app.get("/api/restock-orders", response_model=List[RestockOrder])
+def get_restock_orders():
+    """Return all submitted restocking orders, newest first."""
+    return sorted(restock_orders, key=lambda o: o["submitted_at"], reverse=True)
+
+@app.post("/api/restock-orders", response_model=RestockOrder, status_code=201)
+def create_restock_order(payload: CreateRestockOrderRequest):
+    """Submit a new restocking order. Resolves SKUs against current inventory
+    for cost + category, then derives lead time from the slowest category."""
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="Order must include at least one item")
+
+    line_items: List[dict] = []
+    max_lead = 0
+    total_cost = 0.0
+
+    for line in payload.items:
+        if line.quantity <= 0:
+            raise HTTPException(status_code=400, detail=f"Quantity for {line.sku} must be positive")
+
+        inv = next((i for i in inventory_items if i["sku"] == line.sku), None)
+        if not inv:
+            raise HTTPException(status_code=404, detail=f"SKU {line.sku} not found in inventory")
+
+        unit_cost = float(inv["unit_cost"])
+        line_total = round(unit_cost * line.quantity, 2)
+        total_cost += line_total
+
+        category = inv["category"]
+        # Order-level lead time = slowest category in the cart, so the whole
+        # shipment can be promised by a single date.
+        max_lead = max(max_lead, CATEGORY_LEAD_TIMES.get(category, DEFAULT_LEAD_TIME))
+
+        line_items.append({
+            "sku": inv["sku"],
+            "name": inv["name"],
+            "category": category,
+            "quantity": line.quantity,
+            "unit_cost": unit_cost,
+            "line_total": line_total,
+        })
+
+    if total_cost > payload.budget:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order total ${total_cost:.2f} exceeds budget ${payload.budget:.2f}",
+        )
+
+    now = datetime.now(timezone.utc)
+    # Order number includes a per-second timestamp + an in-process counter, so
+    # it stays unique even after a restart resets `len(restock_orders)`.
+    order_number = (
+        f"RST-{now.strftime('%Y%m%d-%H%M%S')}-{len(restock_orders) + 1:03d}"
+    )
+    order = {
+        "id": str(uuid4()),
+        "order_number": order_number,
+        "submitted_at": now.isoformat(timespec="seconds"),
+        "budget": round(payload.budget, 2),
+        "total_cost": round(total_cost, 2),
+        "lead_time_days": max_lead,
+        "expected_delivery": (now + timedelta(days=max_lead)).date().isoformat(),
+        "status": "Submitted",
+        "items": line_items,
+    }
+    restock_orders.append(order)
+    return order
 
 if __name__ == "__main__":
     import uvicorn
